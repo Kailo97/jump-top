@@ -4,6 +4,6 @@
 	{
 		"#format"		"{1:s},{2:s},{3:.3f},{4:d}" // Player's name, Jump type, Distance, Place
 		"en"			"{1} is now {4} in {2} Top with a {3} units jump."
-		"ru"			"{1} теперь {4}-й в {2} рейтинге с дистанцией {3} units."
+		"ru"			"{1} С‚РµРїРµСЂСЊ {4}-Р№ РІ {2} СЂРµР№С‚РёРЅРіРµ СЃ РґРёСЃС‚Р°РЅС†РёРµР№ {3} units."
 	}
 }
