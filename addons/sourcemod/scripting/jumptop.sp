@@ -15,7 +15,7 @@
 
 #include <jumpstats>
 
-#define ITEMS 10
+#define ITEMS 10 // Number of places in top
 #define STEAMID_LEN 18
 #define NAME_LEN 40
 
@@ -172,10 +172,13 @@ public OnJump(client, JumpType:type, Float:distance)
 			lastrealplace = i2;
 		}
 	}
-	PrintToServer("%d", lastrealplace);
 	if(lastrealplace != 0) {
 		new place = lastrealplace + 1;
 		while(place != 1 && distance > g_distances[type][place - 1]) {
+			if (place-1 == 10) {
+				place--;
+				continue;
+			}
 			WriteRecordToDB(type, place, g_Names[type][place-1], g_SteamIds[type][place-1], g_distances[type][place-1]);
 			g_Names[type][place] = g_Names[type][place-1];
 			g_SteamIds[type][place] = g_SteamIds[type][place-1];
