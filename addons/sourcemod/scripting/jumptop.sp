@@ -45,6 +45,9 @@ public OnPluginStart()
 	RegConsoleCmd("sm_ljtop", Command_Redict);
 	RegConsoleCmd("sm_top", Command_Redict);
 	RegConsoleCmd("sm_jumptop", Command_ShowTop);
+	RegConsoleCmd("sm_jt", Command_ShowTop);
+	
+	RegAdminCmd("sm_jtclear", Command_Clear, ADMFLAG_SLAY);
 	
 	// Connect to db
 	new String:error[255], String:confname[64];
@@ -113,6 +116,39 @@ public bool:CheckConnection(String:error[], maxlength)
 */
 
 public WriteRecordToDB(JumpType:type, place, const String:name[], const String:steamid[], Float:distance) {
+	new String:query[255];
+	if(g_WriteExist[type][place])
+		Format(query, 255, "UPDATE jumptop_%s SET name='%s', steamid='%s', distance='%.3f' WHERE place=%d", g_saJumpTypes[type], name, steamid, distance, place);
+	else {
+		Format(query, 255, "INSERT INTO jumptop_%s (place, name, steamid, distance) VALUES ('%d', '%s', '%s', '%.3f')", g_saJumpTypes[type], place, name, steamid, distance);
+		g_WriteExist[type][place] = true;
+	}
+	SQL_TQuery(g_db, T_WriteRecordToDB, query);
+}
+
+public T_WriteRecordToDB(Handle:owner, Handle:hndl, const String:error[], any:data)
+{
+	if (hndl == INVALID_HANDLE)
+	{
+		LogError("Failed to query (error: %s)", error);
+	}
+}
+
+public DeleteRecordFromDB(JumpType:type, place) {
+	new String:query[255];
+	Format(query, 255, "DELETE FROM jumptop_%s WHERE place = %d", g_saJumpTypes[type], place);
+	SQL_TQuery(g_db, T_DeleteRecordFromDB, query);
+}
+
+public T_DeleteRecordFromDB(Handle:owner, Handle:hndl, const String:error[], any:data)
+{
+	if (hndl == INVALID_HANDLE)
+	{
+		LogError("Failed to query (error: %s)", error);
+	}
+}
+
+/*public WriteRecordToDB(JumpType:type, place, const String:name[], const String:steamid[], Float:distance) {
 	new String:tablename[64], String:error[255];
 	Format(tablename, 64, "jumptop_%s", g_saJumpTypes[type]);
 	new String:query[255];
@@ -127,23 +163,29 @@ public WriteRecordToDB(JumpType:type, place, const String:name[], const String:s
 		SQL_GetError(g_db, error, 255);
 		LogError("Failed to query (error: %s)", error);
 	}
-}
+}*/
 
 public OnJump(client, JumpType:type, Float:distance)
 {
-	// Check if new distance <= distance of 10th place, do nothing
-	if(g_WriteExist[type][ITEMS] && distance <= g_distances[type][ITEMS])
+	//Log("%N %s %.3f", client, g_saPrettyJumpTypes[type], distance);
+	// Check if new distance <= distance of 10th place or new distance > 300 units, do nothing
+	if(distance > 300.0 || (g_WriteExist[type][ITEMS] && distance <= g_distances[type][ITEMS]))
 		return;
 	// Check if player already have record in top
+	new lastrealplace = 0;
 	new String:name[NAME_LEN+1];
 	GetClientName(client, name, NAME_LEN+1);
 	new String:steamid[STEAMID_LEN+1];
 	GetClientAuthId(client, AuthId_Steam2, steamid, STEAMID_LEN+1);
 	for(new i=1;i<=ITEMS;i++) {
+		//Log("Сравнение %s %s", steamid, g_SteamIds[type][i]);
 		if(strcmp(steamid, g_SteamIds[type][i]) == 0) {
 			// if him new distance > old record
+			//Log("Old distance: %.3f", g_distances[type][i]);
+			//Log("New distance: %.3f", distance);
 			if(distance > g_distances[type][i]) {
 				// Store him current place
+				//Log("Distance more!");
 				new place = i;
 				// If player's distance from next place < new distance, move player from next place to place lowwer, and up place for our player. Do it while him not be on 1st place or distance from next place be largest.
 				while(place != 1 && distance > g_distances[type][place-1]) {
@@ -159,19 +201,18 @@ public OnJump(client, JumpType:type, Float:distance)
 				g_SteamIds[type][place] = steamid;
 				g_distances[type][place] = distance;
 				PrintToChatAll("%t", "New Record", name, g_saPrettyJumpTypes[type], distance, place);
+				//Log("Write %s on %d place with %.3f. (place befor: %.3f, after: %.3f)", name, place, g_distances[type][place], g_distances[type][place-1], g_distances[type][place+1]);
 				return;
 			}
 			// if him new distance <= old record, do nothing 
 			return;
 		}
-	}
-	// If player haven't record in top
-	new lastrealplace = 0;
-	for(new i2=1;i2<=ITEMS;i2++) {
-		if(g_WriteExist[type][i2]) {
-			lastrealplace = i2;
+		if(g_WriteExist[type][i]) {
+			lastrealplace = i;
 		}
 	}
+	// If player haven't record in top
+	//Log("Player don't in top, lastrealplace = %d", lastrealplace);
 	if(lastrealplace != 0) {
 		new place = lastrealplace + 1;
 		while(place != 1 && distance > g_distances[type][place - 1]) {
@@ -183,26 +224,33 @@ public OnJump(client, JumpType:type, Float:distance)
 			g_Names[type][place] = g_Names[type][place-1];
 			g_SteamIds[type][place] = g_SteamIds[type][place-1];
 			g_distances[type][place] = g_distances[type][place-1];
+			g_WriteExist[type][place] = g_WriteExist[type][place-1];
 			place--;
 		}
+		if(place == 11)
+			return;
 		WriteRecordToDB(type, place, name, steamid, distance);
 		g_Names[type][place] = name;
 		g_SteamIds[type][place] = steamid;
 		g_distances[type][place] = distance;
+		g_WriteExist[type][place] = true;
 		PrintToChatAll("%t", "New Record", name, g_saPrettyJumpTypes[type], distance, place);
+		//Log("Write %s on %d place with %.3f. (place befor: %.3f, after: %.3f)", name, place, g_distances[type][place], g_distances[type][place-1], g_distances[type][place+1]);
 		return;
 	}
+	//Log("No records in top. Wtite to 1st. (Debug: %b %.3f)", g_WriteExist[type][1], g_distances[type][1])
 	WriteRecordToDB(type, 1, name, steamid, distance);
 	g_Names[type][1] = name;
 	g_SteamIds[type][1] = steamid;
 	g_distances[type][1] = distance;
+	g_WriteExist[type][1] = true;
 	PrintToChatAll("%t", "New Record", name, g_saPrettyJumpTypes[type], distance, 1);
 	return;
 }
 
 public Action:Command_Redict(client, args)
 {
-	ReplyToCommand(client, "Use /jumptop instead.");
+	ReplyToCommand(client, "Use /jumptop or /jt instead.");
 }
 
 public Action:Command_ShowTop(client, args)
@@ -244,4 +292,34 @@ public TopMenuHandler(Handle:menu, MenuAction:action, param1, param2)
 public TopPanelHandler(Handle:menu, MenuAction:action, param1, param2)
 {
     //nothing to do
-}  
+}
+
+// For Debug
+/*public Log(const String:fromat[], any:...)
+{
+	new String:logfile[512], String:buffer[1024];
+	VFormat(buffer, sizeof(buffer), fromat, 2);
+	GetPluginFilename(INVALID_HANDLE, logfile, 512);
+	ReplaceString(logfile, 512, ".smx", "");
+	if(!DirExists("logs/sourcemod")) {
+		CreateDirectory("logs/sourcemod", 777);
+	}
+	Format(logfile, 512, "logs/sourcemod/%s.logs.txt", logfile);
+	if(!FileExists(logfile)) {
+		OpenFile(logfile, "at");
+	}
+	LogToFileEx(logfile, "%s", buffer);
+}*/
+
+public Action:Command_Clear(client, args)
+{
+	for(new JumpType:type = Jump_LJ;type<Jump_End;type++) {
+		for(new place=1;place<=10;place++) {
+			g_WriteExist[type][place] = false;
+			g_SteamIds[type][place] = "";
+			g_Names[type][place] = "";
+			g_distances[type][place] = 0.0;
+			DeleteRecordFromDB(type, place);
+		}
+	}
+}
