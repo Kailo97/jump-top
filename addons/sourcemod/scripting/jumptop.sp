@@ -25,13 +25,14 @@ new Float:g_distances[sizeof(g_saJumpTypes)][ITEMS+1];
 new bool:g_WriteExist[sizeof(g_saJumpTypes)][ITEMS+1];
 new String:g_Names[sizeof(g_saJumpTypes)][ITEMS+1][NAME_LEN+1];
 new String:g_SteamIds[sizeof(g_saJumpTypes)][ITEMS+1][STEAMID_LEN+1];
+new g_deletedtype;
 
 public Plugin:myinfo =
 {
 	name = "Jump Top",
 	author = "Maxim 'Kailo' Telezhenko",
 	description = "Jump rating",
-	version = "alpha-0.0.1",
+	version = "0.0.2-dev-alpha",
 	url = "http://steamcommunity.com/id/kailo97/"
 };
 
@@ -216,7 +217,7 @@ public OnJump(client, JumpType:type, Float:distance)
 	if(lastrealplace != 0) {
 		new place = lastrealplace + 1;
 		while(place != 1 && distance > g_distances[type][place - 1]) {
-			if (place-1 == 10) {
+			if (place-1 == ITEMS) {
 				place--;
 				continue;
 			}
@@ -227,7 +228,7 @@ public OnJump(client, JumpType:type, Float:distance)
 			g_WriteExist[type][place] = g_WriteExist[type][place-1];
 			place--;
 		}
-		if(place == 11)
+		if(place == ITEMS+1)
 			return;
 		WriteRecordToDB(type, place, name, steamid, distance);
 		g_Names[type][place] = name;
@@ -235,7 +236,7 @@ public OnJump(client, JumpType:type, Float:distance)
 		g_distances[type][place] = distance;
 		g_WriteExist[type][place] = true;
 		PrintToChatAll("%t", "New Record", name, g_saPrettyJumpTypes[type], distance, place);
-		//Log("Write %s on %d place with %.3f. (place befor: %.3f, after: %.3f)", name, place, g_distances[type][place], g_distances[type][place-1], g_distances[type][place+1]);
+		//Log("Write %s on %d place with %.3f. (place befor: %.3f, after: %.3f)", name, place, g_distances[type][place], g_distances[type][place-1], (place == ITEMS) ? 0.0 : g_distances[type][place+1]);
 		return;
 	}
 	//Log("No records in top. Wtite to 1st. (Debug: %b %.3f)", g_WriteExist[type][1], g_distances[type][1])
@@ -277,7 +278,7 @@ public TopMenuHandler(Handle:menu, MenuAction:action, param1, param2)
 		SetPanelTitle(panel, info);
 		for(new place=1;place<=ITEMS;place++) {
 			new String:place_txt[3], String:buffer[128];
-			(place<10) ? Format(place_txt, 3, "0%d", place) : Format(place_txt, 3, "%d", place);
+			(place<ITEMS) ? Format(place_txt, 3, "0%d", place) : Format(place_txt, 3, "%d", place);
 			(place == ITEMS) ? Format(buffer, 128, "%s %.3f %s", place_txt, g_distances[param2+1][place], g_Names[param2+1][place]) : Format(buffer, 128, "%s %.3f %s\n", place_txt, g_distances[param2+1][place], g_Names[param2+1][place]);
 			DrawPanelText(panel, buffer);
 		}
@@ -313,13 +314,74 @@ public TopPanelHandler(Handle:menu, MenuAction:action, param1, param2)
 
 public Action:Command_Clear(client, args)
 {
-	for(new JumpType:type = Jump_LJ;type<Jump_End;type++) {
-		for(new place=1;place<=10;place++) {
-			g_WriteExist[type][place] = false;
-			g_SteamIds[type][place] = "";
-			g_Names[type][place] = "";
-			g_distances[type][place] = 0.0;
-			DeleteRecordFromDB(type, place);
+	new String:ArgString[256];
+	GetCmdArgString(ArgString, 256);
+	if(GetCmdArgs() != 0 && strcmp(ArgString, "all") == 0) {
+		for(new JumpType:type = Jump_LJ;type<Jump_End;type++) {
+			for(new place=1;place<=ITEMS;place++) {
+				g_WriteExist[type][place] = false;
+				g_SteamIds[type][place] = "";
+				g_Names[type][place] = "";
+				g_distances[type][place] = 0.0;
+				DeleteRecordFromDB(type, place);
+			}
 		}
+	}
+	if(GetCmdArgs() == 0) {
+		new Handle:menu = CreateMenu(DeleteMenuHandler1);
+		SetMenuTitle(menu, "What Jump Type?");
+		for(new JumpType:jumptype = Jump_LJ;jumptype<Jump_End;jumptype++)
+		{
+			AddMenuItem(menu, g_saJumpTypes[jumptype], g_saJumpTypes[jumptype]);
+		}
+		SetMenuExitButton(menu, true);
+		DisplayMenu(menu, client, 10);
+	}
+}
+
+public DeleteMenuHandler1(Handle:menu, MenuAction:action, param1, param2)
+{
+	if (action == MenuAction_Select)
+	{
+		g_deletedtype = param2+1;
+		new Handle:menu2 = CreateMenu(DeleteMenuHandler2);
+		SetMenuTitle(menu2, "What Place?");
+		for(new place=1;place<=ITEMS;place++)
+		{
+			new String:info[64], String:display[64];
+			Format(info, 64, "%d", place);
+			Format(display, 64, "%s%d %.3f %s", (place < ITEMS) ? "0" : "", place, g_distances[param2+1][place], g_Names[param2+1][place]);
+			AddMenuItem(menu2, info, display);
+		}
+		SetMenuExitButton(menu2, true);
+		DisplayMenu(menu2, param1, 10);
+	}
+	else if (action == MenuAction_End)
+	{
+		CloseHandle(menu);
+	}
+}
+
+public DeleteMenuHandler2(Handle:menu, MenuAction:action, param1, param2)
+{
+	if (action == MenuAction_Select)
+	{
+		new place = param2+1;
+		while(place != ITEMS && g_WriteExist[g_deletedtype][place+1]) {
+			WriteRecordToDB(JumpType:g_deletedtype, place, g_Names[g_deletedtype][place+1], g_SteamIds[g_deletedtype][place+1], g_distances[g_deletedtype][place+1]);
+			g_Names[g_deletedtype][place] = g_Names[g_deletedtype][place+1];
+			g_SteamIds[g_deletedtype][place] = g_SteamIds[g_deletedtype][place+1];
+			g_distances[g_deletedtype][place] = g_distances[g_deletedtype][place+1];
+			place++;
+		}
+		DeleteRecordFromDB(JumpType:g_deletedtype, place);
+		g_Names[g_deletedtype][place] = "";
+		g_SteamIds[g_deletedtype][place] = "";
+		g_distances[g_deletedtype][place] = 0.0;
+		g_WriteExist[g_deletedtype][place] = false;
+	}
+	else if (action == MenuAction_End)
+	{
+		CloseHandle(menu);
 	}
 }
