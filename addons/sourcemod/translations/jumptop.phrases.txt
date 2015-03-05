@@ -6,4 +6,11 @@
 		"en"			"{1} is now {4} in {2} Top with a {3} units jump."
 		"ru"			"{1} теперь {4}-й в {2} рейтинге с дистанцией {3} units."
 	}
+	
+	"New Own Record"
+	{
+		"#format"		"{1:s},{2:.3f}" // Jump type, Distance
+		"en"			"You set a new own record in {1} with a {2} units distance."
+		"ru"			"Вы установили новый личный {1} рекорд с дистанцией в {2} единиц."
+	}
 }
