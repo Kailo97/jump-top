@@ -150,7 +150,7 @@ public OnJump(client, JumpType:type, Float:distance)
 		Format(query, 255, "UPDATE `%s` SET `%s` = '%.3f' WHERE `steamid` = '%s';", TABLENAME, g_saJumpTypes[type], distance, steamid);
 		Log("%s", query);
 		SQL_TQuery(g_db, T_WritePlayerRecords, query);
-		PrintToChat(client, "%t", "New Own Record", g_saJumpTypes[type], distance);
+		PrintToChat(client, "%t", "New Own Record", g_saPrettyJumpTypes[type], distance);
 		
 		//Player was in top 10?
 		new lastrealplace;
