@@ -19,12 +19,16 @@
 #define STEAMID_LEN 18
 #define NAME_LEN 40
 
+// On/Off Logs
+new bool:g_bLog = true;
+
 new Handle:g_db = INVALID_HANDLE;
 new Handle:g_confname = INVALID_HANDLE;
 new Float:g_distances[MAXPLAYERS+1][sizeof(g_saJumpTypes)];
 new Float:g_top10distances[sizeof(g_saJumpTypes)][11];
 new String:g_top10Names[sizeof(g_saJumpTypes)][11][NAME_LEN+1];
 new String:g_top10SteamIds[sizeof(g_saJumpTypes)][11][STEAMID_LEN+1];
+new g_deletedtype;
 
 public Plugin:myinfo =
 {
@@ -51,6 +55,8 @@ public OnPluginStart()
 	RegConsoleCmd("sm_jt", Command_ShowTop);
 	RegConsoleCmd("sm_rec", Command_ShowRecord);
 	RegConsoleCmd("sm_record", Command_ShowRecord);
+	
+	RegAdminCmd("sm_jtclear", Command_Clear, ADMFLAG_SLAY);
 	
 	// Connect to db
 	new String:error[255], String:confname[64];
@@ -96,6 +102,19 @@ public OnPluginStart()
 			}
 			CloseHandle(hndl);
 		}
+	}
+	
+	// Check for players on server
+	for(new client=1;client<MaxClients;client++)
+	if(IsClientInGame(client)) {
+		Log("%N joined.", client);
+		new String:steamid[STEAMID_LEN+1], String:select[255];
+		GetClientAuthId(client, AuthId_Steam2, steamid, STEAMID_LEN+1);
+		for(new JumpType:type = Jump_LJ;type<Jump_End;type++)
+			(type == Jump_LJ) ? Format(select, 255, "`%s`", g_saJumpTypes[type]) : Format(select, 255, "%s, `%s`", select, g_saJumpTypes[type]);
+		Format(query, 255, "SELECT %s FROM `%s` WHERE `steamid` LIKE '%s';", select, TABLENAME, steamid);
+		Log("%s", query);
+		SQL_TQuery(g_db, T_ReadPlayerRecords, query, client);
 	}
 }
 
@@ -143,7 +162,7 @@ public T_InsertPlayerRecords(Handle:owner, Handle:hndl, const String:error[], an
 
 public OnJump(client, JumpType:type, Float:distance)
 {
-	if(distance > g_distances[client][type]) {
+	if(distance > g_distances[client][type] && distance < 300.0) {
 		g_distances[client][type] = distance;
 		new String:query[255], String:steamid[STEAMID_LEN+1];
 		GetClientAuthId(client, AuthId_Steam2, steamid, STEAMID_LEN+1);
@@ -284,9 +303,105 @@ public Action:Command_ShowRecord(client, args)
 	return Plugin_Handled;
 }
 
+public Action:Command_Clear(client, args)
+{
+	new Handle:menu = CreateMenu(DeleteMenuHandler1);
+	SetMenuTitle(menu, "What Jump Type?");
+	for(new JumpType:jumptype = Jump_LJ;jumptype<Jump_End;jumptype++)
+	{
+		AddMenuItem(menu, g_saJumpTypes[jumptype], g_saJumpTypes[jumptype]);
+	}
+	SetMenuExitButton(menu, true);
+	DisplayMenu(menu, client, 10);
+}
+
+public DeleteMenuHandler1(Handle:menu, MenuAction:action, param1, param2)
+{
+	if (action == MenuAction_Select)
+	{
+		g_deletedtype = param2+1;
+		new Handle:menu2 = CreateMenu(DeleteMenuHandler2);
+		SetMenuTitle(menu2, "What Place?");
+		for(new place=1;place<=10;place++)
+		{
+			new String:info[64], String:display[64];
+			Format(info, 64, "%d", place);
+			Format(display, 64, "%s%d %.3f %s", (place < 10) ? "0" : "", place, g_top10distances[param2+1][place], g_top10Names[param2+1][place]);
+			AddMenuItem(menu2, info, display);
+		}
+		SetMenuExitButton(menu2, true);
+		DisplayMenu(menu2, param1, 10);
+	}
+	else if (action == MenuAction_End)
+	{
+		CloseHandle(menu);
+	}
+}
+
+public DeleteMenuHandler2(Handle:menu, MenuAction:action, param1, param2)
+{
+	if (action == MenuAction_Select)
+	{
+		new place = param2+1;
+		LogAction(param1, -1, "\"%L\" delete %d place (%s %.3f %s) from %s top.", param1, place, g_top10SteamIds[g_deletedtype][place], g_top10distances[g_deletedtype][place], g_top10Names[g_deletedtype][place], g_saPrettyJumpTypes[g_deletedtype]);
+		for(new i=1;i<MaxClients;i++)
+			if(IsClientInGame(i)) {
+				new String:steamid[STEAMID_LEN+1];
+				GetClientAuthId(i, AuthId_Steam2, steamid, STEAMID_LEN+1);
+				if(!strcmp(steamid, g_top10SteamIds[g_deletedtype][place]))
+					g_distances[i][g_deletedtype] = 0.0;
+			}
+		new String:query[255];
+		Format(query, 255, "UPDATE `%s` SET `%s` = '0.000' WHERE `steamid` = '%s';", TABLENAME, g_saJumpTypes[g_deletedtype], g_top10SteamIds[g_deletedtype][place]);
+		Log("%s", query);
+		SQL_TQuery(g_db, T_DeletePlayerRecord1, query);
+	}
+	else if (action == MenuAction_End)
+	{
+		CloseHandle(menu);
+	}
+}
+
+public T_DeletePlayerRecord1(Handle:owner, Handle:hndl, const String:error[], any:data)
+{
+	if (hndl == INVALID_HANDLE)
+		LogError("Failed to query (error: %s)", error);
+	else {
+		new String:query[255];
+		Format(query, 512, "SELECT `steamid`, `name`, `%s` FROM `%s` ORDER BY `%s` DESC LIMIT 10;", g_saJumpTypes[g_deletedtype], TABLENAME, g_saJumpTypes[g_deletedtype]);
+		Log("%s", query);
+		SQL_TQuery(g_db, T_DeletePlayerRecord2, query);
+	}
+}
+
+public T_DeletePlayerRecord2(Handle:owner, Handle:hndl, const String:error[], any:data)
+{
+	if (hndl == INVALID_HANDLE)
+		LogError("Failed to query (error: %s)", error);
+	else {
+		for(new i=1;i<=10;i++) {
+			g_top10distances[g_deletedtype][i] = 0.0;
+			g_top10SteamIds[g_deletedtype][i] = "";
+			g_top10Names[g_deletedtype][i] = "";
+		}
+		new end=SQL_GetRowCount(hndl);
+		Log("Rows = %d", end);
+		for(new i=1;i<=end;i++) {
+			SQL_FetchRow(hndl);
+			g_top10distances[g_deletedtype][i] = SQL_FetchFloat(hndl, 2);
+			if(g_top10distances[g_deletedtype][i] == 0.0)
+				break;
+			SQL_FetchString(hndl, 0, g_top10SteamIds[g_deletedtype][i], STEAMID_LEN+1);
+			SQL_FetchString(hndl, 1, g_top10Names[g_deletedtype][i], NAME_LEN+1);
+		}
+	}
+}
+
 // For Debug
 public Log(const String:fromat[], any:...)
 {
+	if(!g_bLog)
+		return;
 	new String:logfile[512], String:buffer[1024];
 	VFormat(buffer, sizeof(buffer), fromat, 2);
 	GetPluginFilename(INVALID_HANDLE, logfile, 512);
