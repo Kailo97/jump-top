@@ -13,33 +13,34 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>
 
+#pragma newdecls required
+
 #include <jumpstats>
 
 #define TABLENAME "jumptop"
-#define STEAMID_LEN 18
-#define NAME_LEN 40
+#define STEAMID_LEN 20
 
-// On/Off Logs
-new bool:g_bLog = true;
+// Log switch
+public const bool g_bLog = true;
 
-new Handle:g_db = INVALID_HANDLE;
-new Handle:g_confname = INVALID_HANDLE;
-new Float:g_distances[MAXPLAYERS+1][sizeof(g_saJumpTypes)];
-new Float:g_top10distances[sizeof(g_saJumpTypes)][11];
-new String:g_top10Names[sizeof(g_saJumpTypes)][11][NAME_LEN+1];
-new String:g_top10SteamIds[sizeof(g_saJumpTypes)][11][STEAMID_LEN+1];
-new g_deletedtype;
+Database g_db;
+ConVar g_confname;
+float g_distances[MAXPLAYERS+1][sizeof(g_saJumpTypes)];
+float g_top10distances[sizeof(g_saJumpTypes)][11];
+char g_top10Names[sizeof(g_saJumpTypes)][11][MAX_NAME_LENGTH+1];
+char g_top10SteamIds[sizeof(g_saJumpTypes)][11][STEAMID_LEN+1];
+int g_deletedtype;
 
-public Plugin:myinfo =
+public Plugin myinfo =
 {
 	name = "Jump Top",
 	author = "Maxim 'Kailo' Telezhenko",
 	description = "Jump leaderboard",
-	version = "0.0.1-dev-alpha",
+	version = "0.0.2-dev-alpha",
 	url = "http://steamcommunity.com/id/kailo97/"
 };
 
-public OnPluginStart()
+public void OnPluginStart()
 {
 	Log(" ");
 	Log("Plugin started.");
@@ -59,21 +60,21 @@ public OnPluginStart()
 	RegAdminCmd("sm_jtclear", Command_Clear, ADMFLAG_SLAY);
 	
 	// Connect to db
-	new String:error[255], String:confname[64];
-	GetConVarString(g_confname, confname, 64);
+	char error[255], confname[64];
+	g_confname.GetString(confname, 64);
 	if (strlen(confname) == 0)
 		confname = "default";
 	g_db = SQL_Connect(confname, false, error, 255);
-	if (g_db == INVALID_HANDLE) {
+	if (g_db == INVALID_HANDLE)
 		LogError("Could not connect: %s", error);
-	}
+	g_db.SetCharset("utf8");
 	
 	// Check table exist
-	new String:querypart[512];
-	for(new JumpType:type = Jump_LJ;type<Jump_End;type++)
+	char querypart[512];
+	for(JumpType type = Jump_LJ;type<Jump_End;type++)
 		Format(querypart, 512, "%s, `%s` float(6,3) DEFAULT '0.000'", querypart, g_saJumpTypes[type]);
-	new String:query[512];
-	Format(query, 512, "CREATE TABLE IF NOT EXISTS `%s` (`steamid` varchar(%d) NOT NULL PRIMARY KEY, `name` varchar(%d) NOT NULL%s) DEFAULT CHARSET=utf8mb4;", TABLENAME, NAME_LEN, STEAMID_LEN, querypart);
+	char query[512];
+	Format(query, 512, "CREATE TABLE IF NOT EXISTS `%s` (`steamid` varchar(%d) NOT NULL PRIMARY KEY, `name` varchar(%d) NOT NULL%s) DEFAULT CHARSET=utf8mb4;", TABLENAME, STEAMID_LEN, MAX_NAME_LENGTH, querypart);
 	Log("%s", query);
 	if (!SQL_FastQuery(g_db, query))
 	{
@@ -82,89 +83,101 @@ public OnPluginStart()
 	}
 	
 	// Get first 10 places from DB
-	for(new JumpType:type = Jump_LJ;type<Jump_End;type++) {
+	for(JumpType type = Jump_LJ;type<Jump_End;type++) {
 		Format(query, 512, "SELECT `steamid`, `name`, `%s` FROM `%s` ORDER BY `%s` DESC LIMIT 10;", g_saJumpTypes[type], TABLENAME, g_saJumpTypes[type]);
 		Log("%s", query);
-		new Handle:hndl = SQL_Query(g_db, query);
+		Handle hndl = SQL_Query(g_db, query);
 		if(hndl == INVALID_HANDLE) {
 			SQL_GetError(g_db, error, 255);
 			LogError("Failed to query (error: %s)", error);
 		} else {
-			new end=SQL_GetRowCount(hndl);
+			int end = SQL_GetRowCount(hndl);
 			Log("Rows = %d", end);
-			for(new i=1;i<=end;i++) {
+			for(int i=1;i<=end;i++) {
 				SQL_FetchRow(hndl);
 				g_top10distances[type][i] = SQL_FetchFloat(hndl, 2);
 				if(g_top10distances[type][i] == 0.0)
 					break;
 				SQL_FetchString(hndl, 0, g_top10SteamIds[type][i], STEAMID_LEN+1);
-				SQL_FetchString(hndl, 1, g_top10Names[type][i], NAME_LEN+1);
+				SQL_FetchString(hndl, 1, g_top10Names[type][i], MAX_NAME_LENGTH+1);
 			}
 			CloseHandle(hndl);
 		}
 	}
 	
 	// Check for players on server
-	for(new client=1;client<MaxClients;client++)
-	if(IsClientInGame(client)) {
-		Log("%N joined.", client);
-		new String:steamid[STEAMID_LEN+1], String:select[255];
-		GetClientAuthId(client, AuthId_Steam2, steamid, STEAMID_LEN+1);
-		for(new JumpType:type = Jump_LJ;type<Jump_End;type++)
-			(type == Jump_LJ) ? Format(select, 255, "`%s`", g_saJumpTypes[type]) : Format(select, 255, "%s, `%s`", select, g_saJumpTypes[type]);
-		Format(query, 255, "SELECT %s FROM `%s` WHERE `steamid` LIKE '%s';", select, TABLENAME, steamid);
-		Log("%s", query);
-		SQL_TQuery(g_db, T_ReadPlayerRecords, query, client);
-	}
+	for(int client=1;client<MaxClients;client++)
+		if(IsClientInGame(client)) {
+			GetPlayerRecords(client);
+		}
 }
 
-public OnClientPutInServer(client)
+public void T_NoResult(Database db, DBResultSet results, const char[] error, any data)
+{
+	if (results == INVALID_HANDLE)
+		LogError("Failed to query (error: %s)", error);
+}
+
+public void OnClientPutInServer(int client)
+{
+	GetPlayerRecords(client);
+}
+
+public void GetPlayerRecords(int client)
 {
 	Log("%N joined.", client);
-	new String:query[255], String:steamid[STEAMID_LEN+1], String:select[255];
+	char query[255], steamid[STEAMID_LEN+1], select[255];
 	GetClientAuthId(client, AuthId_Steam2, steamid, STEAMID_LEN+1);
-	for(new JumpType:type = Jump_LJ;type<Jump_End;type++)
-		(type == Jump_LJ) ? Format(select, 255, "`%s`", g_saJumpTypes[type]) : Format(select, 255, "%s, `%s`", select, g_saJumpTypes[type]);
-	Format(query, 255, "SELECT %s FROM `%s` WHERE `steamid` LIKE '%s';", select, TABLENAME, steamid);
+	for(JumpType type=Jump_LJ; type<Jump_End; type++)
+		Format(select, 255, "%s, `%s`", select, g_saJumpTypes[type]);
+	Format(query, 255, "SELECT `name`%s FROM `%s` WHERE `steamid` LIKE '%s';", select, TABLENAME, steamid);
 	Log("%s", query);
-	SQL_TQuery(g_db, T_ReadPlayerRecords, query, client);
+	g_db.Query(T_ReadPlayerRecords, query, client);
 }
 
-public T_ReadPlayerRecords(Handle:owner, Handle:hndl, const String:error[], any:data) // data = client
+public void T_ReadPlayerRecords(Database db, DBResultSet results, const char[] error, any client)
 {
-	if (hndl == INVALID_HANDLE)
+	if (results == INVALID_HANDLE)
 		LogError("Failed to query (error: %s)", error);
-	else if(SQL_GetRowCount(hndl)) {
-		SQL_FetchRow(hndl);
-		Log("%N", data);
-		for(new JumpType:type = Jump_LJ;type<Jump_End;type++) {
-			g_distances[data][type] = SQL_FetchFloat(hndl, _:type - 1);
-			Log("%s %.3f", g_saJumpTypes[type], g_distances[data][type]);
+	else if(results.RowCount) {
+		results.FetchRow();
+		Log("%N", client);
+		for(JumpType type=Jump_LJ; type<Jump_End; type++) {
+			g_distances[client][type] = results.FetchFloat(view_as<int>(type));
+			Log("%s %.3f", g_saJumpTypes[type], g_distances[client][type]);
 		}
 		Log(" ");
+		char oldname[MAX_NAME_LENGTH+1], name[MAX_NAME_LENGTH+1];
+		results.FetchString(0, oldname, MAX_NAME_LENGTH+1);
+		GetClientName(client, name, MAX_NAME_LENGTH+1);
+		if (!StrEqual(name, oldname)) {
+			char escapedname[sizeof(name)*2+1], query[255], steamid[STEAMID_LEN+1];
+			g_db.Escape(name, escapedname, sizeof(escapedname));
+			GetClientAuthId(client, AuthId_Steam2, steamid, STEAMID_LEN+1);
+			Format(query, 255, "UPDATE `%s` SET `name` = '%s' WHERE `steamid` = '%s';", TABLENAME, escapedname, steamid);
+			g_db.Query(T_NoResult, query);
+		}
 	} else {
-		Log("%N not in DB. All distances = 0.000", data);
-		for(new JumpType:type = Jump_LJ;type<Jump_End;type++)
-			g_distances[data][type] = 0.0;
-		new String:query[255], String:steamid[STEAMID_LEN+1];
-		GetClientAuthId(data, AuthId_Steam2, steamid, STEAMID_LEN+1);
-		Format(query, 255, "INSERT INTO `%s` (`steamid`, `name`) VALUES ('%s', '%N');", TABLENAME, steamid, data);
+		Log("%N not in DB. All distances = 0.000", client);
+		for(JumpType type = Jump_LJ;type<Jump_End;type++)
+			g_distances[client][type] = 0.0;
+		char query[255], steamid[STEAMID_LEN+1];
+		GetClientAuthId(client, AuthId_Steam2, steamid, STEAMID_LEN+1);
+		char name[MAX_NAME_LENGTH+1];
+		GetClientName(client, name, MAX_NAME_LENGTH+1);
+		char escapedname[sizeof(name)*2+1];
+		g_db.Escape(name, escapedname, sizeof(escapedname));
+		Format(query, 255, "INSERT INTO `%s` (`steamid`, `name`) VALUES ('%s', '%s');", TABLENAME, steamid, escapedname);
 		Log("%s", query);
-		SQL_TQuery(g_db, T_InsertPlayerRecords, query);
+		g_db.Query(T_NoResult, query);
 	}
 }
 
-public T_InsertPlayerRecords(Handle:owner, Handle:hndl, const String:error[], any:data)
-{
-	if (hndl == INVALID_HANDLE)
-		LogError("Failed to query (error: %s)", error);
-}
-
-public OnJump(client, JumpType:type, Float:distance)
+public void OnJump(int client, JumpType type, float distance)
 {
 	if(distance > g_distances[client][type] && distance < 300.0) {
 		g_distances[client][type] = distance;
-		new String:query[255], String:steamid[STEAMID_LEN+1];
+		char query[255], steamid[STEAMID_LEN+1];
 		GetClientAuthId(client, AuthId_Steam2, steamid, STEAMID_LEN+1);
 		Format(query, 255, "UPDATE `%s` SET `%s` = '%.3f' WHERE `steamid` = '%s';", TABLENAME, g_saJumpTypes[type], distance, steamid);
 		Log("%s", query);
@@ -172,8 +185,8 @@ public OnJump(client, JumpType:type, Float:distance)
 		PrintToChat(client, "%t", "New Own Record", g_saPrettyJumpTypes[type], distance);
 		
 		//Player was in top 10?
-		new lastrealplace;
-		for(new place=1;place<=10;place++) {
+		int lastrealplace;
+		for(int place=1;place<=10;place++) {
 			// If player in top 10
 			if (!strcmp(g_top10SteamIds[type][place], steamid)) {
 				if(distance > g_top10distances[type][place]) {
@@ -184,7 +197,7 @@ public OnJump(client, JumpType:type, Float:distance)
 						place--;
 					}
 					g_top10distances[type][place] = distance;
-					GetClientName(client, g_top10Names[type][place], NAME_LEN+1);
+					GetClientName(client, g_top10Names[type][place], MAX_NAME_LENGTH+1);
 					g_top10SteamIds[type][place] = steamid;
 					PrintToChatAll("%t", "New Record", g_top10Names[type][place], g_saPrettyJumpTypes[type], g_top10distances[type][place], place);
 					return;
@@ -201,7 +214,7 @@ public OnJump(client, JumpType:type, Float:distance)
 		// If player not in top 10
 		if(lastrealplace == 10) {
 			if (distance > g_top10distances[type][lastrealplace]) {
-				new place = 10;
+				int place = 10;
 				while (distance > g_top10distances[type][place-1] && place != 1) {
 					g_top10distances[type][place] = g_top10distances[type][place-1];
 					g_top10Names[type][place] = g_top10Names[type][place-1];
@@ -209,14 +222,14 @@ public OnJump(client, JumpType:type, Float:distance)
 					place--;
 				}
 				g_top10distances[type][place] = distance;
-				GetClientName(client, g_top10Names[type][place], NAME_LEN+1);
+				GetClientName(client, g_top10Names[type][place], MAX_NAME_LENGTH+1);
 				g_top10SteamIds[type][place] = steamid;
 				PrintToChatAll("%t", "New Record", g_top10Names[type][place], g_saPrettyJumpTypes[type], g_top10distances[type][place], place);
 				return;
 			} else
 				return;
 		} else if(lastrealplace != 0) {
-			new place = lastrealplace + 1;
+			int place = lastrealplace + 1;
 			while (distance > g_top10distances[type][place-1] && place != 1) {
 				g_top10distances[type][place] = g_top10distances[type][place-1];
 				g_top10Names[type][place] = g_top10Names[type][place-1];
@@ -224,13 +237,13 @@ public OnJump(client, JumpType:type, Float:distance)
 				place--;
 			}
 			g_top10distances[type][place] = distance;
-			GetClientName(client, g_top10Names[type][place], NAME_LEN+1);
+			GetClientName(client, g_top10Names[type][place], MAX_NAME_LENGTH+1);
 			g_top10SteamIds[type][place] = steamid;
 			PrintToChatAll("%t", "New Record", g_top10Names[type][place], g_saPrettyJumpTypes[type], g_top10distances[type][place], place);
 			return;
 		} else {
 			g_top10distances[type][1] = distance;
-			GetClientName(client, g_top10Names[type][1], NAME_LEN+1);
+			GetClientName(client, g_top10Names[type][1], MAX_NAME_LENGTH+1);
 			g_top10SteamIds[type][1] = steamid;
 			PrintToChatAll("%t", "New Record", g_top10Names[type][1], g_saPrettyJumpTypes[type], g_top10distances[type][1], 1);
 			return;
@@ -238,99 +251,158 @@ public OnJump(client, JumpType:type, Float:distance)
 	}
 }
 
-public T_WritePlayerRecords(Handle:owner, Handle:hndl, const String:error[], any:data)
+public void T_WritePlayerRecords(Handle owner, Handle hndl, const char[] error, any data)
 {
 	if (hndl == INVALID_HANDLE)
 		LogError("Failed to query (error: %s)", error);
 }
 
-public Action:Command_Redict(client, args)
+public Action Command_Redict(int client, int args)
 {
 	ReplyToCommand(client, "Use /jumptop or /jt instead.");
 }
 
-public Action:Command_ShowTop(client, args)
+public Action Command_ShowTop(int client, int args)
 {
-	new Handle:menu = CreateMenu(TopMenuHandler);
-	SetMenuTitle(menu, "What Jump Type?");
-	for(new JumpType:jumptype = Jump_LJ;jumptype<Jump_End;jumptype++)
-	{
-		AddMenuItem(menu, g_saJumpTypes[jumptype], g_saJumpTypes[jumptype]);
-	}
-	SetMenuExitButton(menu, true);
-	DisplayMenu(menu, client, 10);
+	Menu menu = CreateMenu(TopMenuHandler);
+	menu.SetTitle("What Jump Type?");
+	for(JumpType jumptype = Jump_LJ;jumptype<Jump_End;jumptype++)
+		menu.AddItem(g_saJumpTypes[jumptype], g_saJumpTypes[jumptype]);
+	menu.Display(client, 10);
  
 	return Plugin_Handled;
 }
 
-public TopMenuHandler(Handle:menu, MenuAction:action, param1, param2)
+public int TopMenuHandler(Menu menu, MenuAction action, int param1, int param2)
 {
 	if (action == MenuAction_Select)
 	{
-		new Handle:panel = CreatePanel();
-		SetPanelTitle(panel, g_saJumpTypes[param2+1]);
-		for(new i=1;i<=10;i++) {
-			new String:buffer[128];
+		Panel panel = CreatePanel();
+		panel.SetTitle(g_saJumpTypes[param2+1], false);
+		for(int i=1;i<=10;i++) {
+			char buffer[128];
 			(i == 10) ? Format(buffer, 128, "%s%d  %.3f %s", (i < 10) ? "0" : "", i, g_top10distances[param2+1][i], g_top10Names[param2+1][i]) : Format(buffer, 128, "%s%d  %.3f %s\n", (i < 10) ? "0" : "", i, g_top10distances[param2+1][i], g_top10Names[param2+1][i]);
-			DrawPanelText(panel, buffer);
+			panel.DrawText(buffer);
 		}
-		SendPanelToClient(panel, param1, TopPanelHandler, 10);
+		panel.Send(param1, TopPanelHandler, 10);
 	}
 	else if (action == MenuAction_End)
 	{
-		CloseHandle(menu);
+		delete menu;
 	}
 }
 
-public TopPanelHandler(Handle:menu, MenuAction:action, param1, param2)
+public int TopPanelHandler(Menu menu, MenuAction action, int param1, int param2)
 {
     //nothing to do
 }
 
-public Action:Command_ShowRecord(client, args)
+public Action Command_ShowRecord(int client, int args)
 {
-	new Handle:panel = CreatePanel(), String:title[128];
-	Format(title, 128, "%N's Records", client);
-	SetPanelTitle(panel, title);
-	for(new JumpType:type = Jump_LJ;type<Jump_End;type++)
-	{
-		new String:buffer[128];
-		(type == Jump_LJ) ? Format(buffer, 128, "%.3f %s", g_distances[client][type], g_saJumpTypes[type]) : Format(buffer, 128, "\n%.3f %s", g_distances[client][type], g_saJumpTypes[type]);
-		DrawPanelText(panel, buffer);
+	if (client == 0) {
+		PrintToServer("It in-game cmd. You can't use it via console.");
+		return Plugin_Handled;
 	}
-	SendPanelToClient(panel, client, TopPanelHandler, 10);
- 
+	if (GetCmdArgs() > 0) {
+		char ArgString[MAX_NAME_LENGTH+1];
+		GetCmdArgString(ArgString, sizeof(ArgString));
+		if (strlen(ArgString) < 2 || strlen(ArgString) > 32) {
+			ReplyToCommand(client, "Name need contain more 1 character.");
+			return Plugin_Handled;
+		}
+		char EscapedArgString[sizeof(ArgString)*2+1];
+		g_db.Escape(ArgString, EscapedArgString, sizeof(EscapedArgString));
+		char query[255];
+		Format(query, 255, "SELECT * FROM `%s` WHERE `name` RLIKE '%s';", TABLENAME, EscapedArgString);
+		g_db.Query(T_FindPlayerRecord, query, client);
+	} else {
+		Panel panel = new Panel();
+		char title[128];
+		Format(title, 128, "%N's Records", client);
+		panel.SetTitle(title, false);
+		for(JumpType type=Jump_LJ; type<Jump_End; type++)
+		{
+			char buffer[128];
+			(type == Jump_LJ) ? Format(buffer, 128, "%.3f %s", g_distances[client][type], g_saJumpTypes[type]) : Format(buffer, 128, "\n%.3f %s", g_distances[client][type], g_saJumpTypes[type]);
+			panel.DrawText(buffer);
+		}
+		panel.Send(client, TopPanelHandler, 10);
+	}
+	
 	return Plugin_Handled;
 }
 
-public Action:Command_Clear(client, args)
+public void T_FindPlayerRecord(Database db, DBResultSet results, const char[] error, any client)
 {
-	new Handle:menu = CreateMenu(DeleteMenuHandler1);
-	SetMenuTitle(menu, "What Jump Type?");
-	for(new JumpType:jumptype = Jump_LJ;jumptype<Jump_End;jumptype++)
-	{
-		AddMenuItem(menu, g_saJumpTypes[jumptype], g_saJumpTypes[jumptype]);
+	if (results == INVALID_HANDLE)
+		LogError("Failed to query (error: %s)", error);
+	else {
+		switch (results.RowCount) {
+			case 0: {
+				PrintToChat(client, "No players with the same name.");
+			}
+			case 1: {
+				results.FetchRow();
+				Panel panel = new Panel();
+				char namebuffer[MAX_NAME_LENGTH+1];
+				results.FetchString(1, namebuffer, MAX_NAME_LENGTH+1);
+				char title[128];
+				Format(title, 128, "%s's Records", namebuffer);
+				panel.SetTitle(title, false);
+				for(JumpType type=Jump_LJ; type<Jump_End; type++)
+				{
+					char buffer[128];
+					int field = 1+view_as<int>(type);
+					(type == Jump_LJ) ? Format(buffer, 128, "%.3f %s", results.FetchFloat(field), g_saJumpTypes[type]) : Format(buffer, 128, "\n%.3f %s", results.FetchFloat(field), g_saJumpTypes[type]);
+					panel.DrawText(buffer);
+				}
+				panel.Send(client, TopPanelHandler, 10);
+			}
+			default: {
+				char names[512];
+				for (int i=1; i<=results.RowCount; i++) {
+					results.FetchRow();
+					char namebuffer[MAX_NAME_LENGTH+1];
+					results.FetchString(1, namebuffer, MAX_NAME_LENGTH+1);
+					StrEqual(names, "") ? Format(names, 512, "%s", namebuffer) : Format(names, 512, "%s, %s", names, namebuffer);
+				}
+				PrintToChat(client, "Do more specific request. May be: %s", names);
+			}
+		}
 	}
-	SetMenuExitButton(menu, true);
-	DisplayMenu(menu, client, 10);
 }
 
-public DeleteMenuHandler1(Handle:menu, MenuAction:action, param1, param2)
+/*void ShowRecordPanel(int client, DataPack Pack=INVALID_HANDLE)
+{
+	
+}*/
+
+public Action Command_Clear(int client, int args)
+{
+	Menu menu = CreateMenu(DeleteMenuHandler1);
+	menu.SetTitle("What Jump Type?");
+	for(JumpType jumptype = Jump_LJ;jumptype<Jump_End;jumptype++)
+		menu.AddItem(g_saJumpTypes[jumptype], g_saJumpTypes[jumptype]);
+	menu.Display(client, 10);
+	
+	return Plugin_Handled;
+}
+
+public int DeleteMenuHandler1(Menu menu, MenuAction action, int param1, int param2)
 {
 	if (action == MenuAction_Select)
 	{
 		g_deletedtype = param2+1;
-		new Handle:menu2 = CreateMenu(DeleteMenuHandler2);
-		SetMenuTitle(menu2, "What Place?");
-		for(new place=1;place<=10;place++)
+		Menu menu2 = CreateMenu(DeleteMenuHandler2);
+		menu2.SetTitle("What Place?");
+		for(int place=1;place<=10;place++)
 		{
-			new String:info[64], String:display[64];
+			char info[64], display[64];
 			Format(info, 64, "%d", place);
 			Format(display, 64, "%s%d %.3f %s", (place < 10) ? "0" : "", place, g_top10distances[param2+1][place], g_top10Names[param2+1][place]);
-			AddMenuItem(menu2, info, display);
+			menu2.AddItem(info, display);
 		}
-		SetMenuExitButton(menu2, true);
-		DisplayMenu(menu2, param1, 10);
+		menu2.Display(param1, 10);
 	}
 	else if (action == MenuAction_End)
 	{
@@ -338,72 +410,72 @@ public DeleteMenuHandler1(Handle:menu, MenuAction:action, param1, param2)
 	}
 }
 
-public DeleteMenuHandler2(Handle:menu, MenuAction:action, param1, param2)
+public int DeleteMenuHandler2(Menu menu, MenuAction action, int param1, int param2)
 {
 	if (action == MenuAction_Select)
 	{
-		new place = param2+1;
+		int place = param2+1;
 		LogAction(param1, -1, "\"%L\" delete %d place (%s %.3f %s) from %s top.", param1, place, g_top10SteamIds[g_deletedtype][place], g_top10distances[g_deletedtype][place], g_top10Names[g_deletedtype][place], g_saPrettyJumpTypes[g_deletedtype]);
-		for(new i=1;i<MaxClients;i++)
+		for(int i=1;i<MaxClients;i++)
 			if(IsClientInGame(i)) {
-				new String:steamid[STEAMID_LEN+1];
+				char steamid[STEAMID_LEN+1];
 				GetClientAuthId(i, AuthId_Steam2, steamid, STEAMID_LEN+1);
 				if(!strcmp(steamid, g_top10SteamIds[g_deletedtype][place]))
 					g_distances[i][g_deletedtype] = 0.0;
 			}
-		new String:query[255];
+		char query[255];
 		Format(query, 255, "UPDATE `%s` SET `%s` = '0.000' WHERE `steamid` = '%s';", TABLENAME, g_saJumpTypes[g_deletedtype], g_top10SteamIds[g_deletedtype][place]);
 		Log("%s", query);
 		SQL_TQuery(g_db, T_DeletePlayerRecord1, query);
 	}
 	else if (action == MenuAction_End)
 	{
-		CloseHandle(menu);
+		delete menu;
 	}
 }
 
-public T_DeletePlayerRecord1(Handle:owner, Handle:hndl, const String:error[], any:data)
+public void T_DeletePlayerRecord1(Handle owner, Handle hndl, const char[] error, any data)
 {
 	if (hndl == INVALID_HANDLE)
 		LogError("Failed to query (error: %s)", error);
 	else {
-		new String:query[255];
+		char query[255];
 		Format(query, 512, "SELECT `steamid`, `name`, `%s` FROM `%s` ORDER BY `%s` DESC LIMIT 10;", g_saJumpTypes[g_deletedtype], TABLENAME, g_saJumpTypes[g_deletedtype]);
 		Log("%s", query);
 		SQL_TQuery(g_db, T_DeletePlayerRecord2, query);
 	}
 }
 
-public T_DeletePlayerRecord2(Handle:owner, Handle:hndl, const String:error[], any:data)
+public void T_DeletePlayerRecord2(Handle owner, Handle hndl, const char[] error, any data)
 {
 	if (hndl == INVALID_HANDLE)
 		LogError("Failed to query (error: %s)", error);
 	else {
-		for(new i=1;i<=10;i++) {
+		for(int i=1;i<=10;i++) {
 			g_top10distances[g_deletedtype][i] = 0.0;
 			g_top10SteamIds[g_deletedtype][i] = "";
 			g_top10Names[g_deletedtype][i] = "";
 		}
-		new end=SQL_GetRowCount(hndl);
+		int end = SQL_GetRowCount(hndl);
 		Log("Rows = %d", end);
-		for(new i=1;i<=end;i++) {
+		for(int i=1;i<=end;i++) {
 			SQL_FetchRow(hndl);
 			g_top10distances[g_deletedtype][i] = SQL_FetchFloat(hndl, 2);
 			if(g_top10distances[g_deletedtype][i] == 0.0)
 				break;
 			SQL_FetchString(hndl, 0, g_top10SteamIds[g_deletedtype][i], STEAMID_LEN+1);
-			SQL_FetchString(hndl, 1, g_top10Names[g_deletedtype][i], NAME_LEN+1);
+			SQL_FetchString(hndl, 1, g_top10Names[g_deletedtype][i], MAX_NAME_LENGTH+1);
 		}
 	}
 }
 
 // For Debug
-public Log(const String:fromat[], any:...)
+void Log(const char[] fromat, any ...)
 {
 	if(!g_bLog)
 		return;
-	new String:logfile[512], String:buffer[1024];
-	VFormat(buffer, sizeof(buffer), fromat, 2);
+	char logfile[512], buffer[1024];
+	VFormat(buffer, 1024, fromat, 2);
 	GetPluginFilename(INVALID_HANDLE, logfile, 512);
 	ReplaceString(logfile, 512, ".smx", "");
 	Format(logfile, 512, "addons/sourcemod/logs/%s.logs.txt", logfile);
