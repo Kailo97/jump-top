@@ -13,9 +13,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>
 
-#pragma newdecls required
-
 #include <jumpstats>
+
+#pragma newdecls required
 
 #define TABLENAME "jumptop"
 #define STEAMID_LEN 20
@@ -36,13 +36,12 @@ public Plugin myinfo =
 	name = "Jump Top",
 	author = "Maxim 'Kailo' Telezhenko",
 	description = "Jump leaderboard",
-	version = "0.0.2-dev-alpha",
+	version = "0.0.3-alpha-1-dev",
 	url = "http://steamcommunity.com/id/kailo97/"
 };
 
 public void OnPluginStart()
 {
-	Log(" ");
 	Log("Plugin started.");
 	
 	LoadTranslations("jumptop.phrases");
@@ -65,8 +64,10 @@ public void OnPluginStart()
 	if (strlen(confname) == 0)
 		confname = "default";
 	g_db = SQL_Connect(confname, false, error, 255);
-	if (g_db == INVALID_HANDLE)
-		LogError("Could not connect: %s", error);
+	if (g_db == INVALID_HANDLE) {
+		SetFailState("Could not connect to database: %s", error);
+		//LogError("Could not connect: %s", error);
+	}
 	g_db.SetCharset("utf8");
 	
 	// Check table exist
@@ -110,6 +111,11 @@ public void OnPluginStart()
 		if(IsClientInGame(client)) {
 			GetPlayerRecords(client);
 		}
+}
+
+public void OnPluginEnd()
+{
+	Log(" ");
 }
 
 public void T_NoResult(Database db, DBResultSet results, const char[] error, any data)
