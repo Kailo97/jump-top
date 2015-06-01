@@ -36,7 +36,7 @@ public Plugin myinfo =
 	name = "Jump Top",
 	author = "Maxim 'Kailo' Telezhenko",
 	description = "Jump leaderboard",
-	version = "0.0.3-alpha-1-dev",
+	version = "0.0.3-alpha-2-dev",
 	url = "http://steamcommunity.com/id/kailo97/"
 };
 
@@ -64,7 +64,7 @@ public void OnPluginStart()
 	if (strlen(confname) == 0)
 		confname = "default";
 	g_db = SQL_Connect(confname, false, error, 255);
-	if (g_db == INVALID_HANDLE) {
+	if (g_db == null) {
 		SetFailState("Could not connect to database: %s", error);
 		//LogError("Could not connect: %s", error);
 	}
@@ -88,7 +88,7 @@ public void OnPluginStart()
 		Format(query, 512, "SELECT `steamid`, `name`, `%s` FROM `%s` ORDER BY `%s` DESC LIMIT 10;", g_saJumpTypes[type], TABLENAME, g_saJumpTypes[type]);
 		Log("%s", query);
 		Handle hndl = SQL_Query(g_db, query);
-		if(hndl == INVALID_HANDLE) {
+		if(hndl == null) {
 			SQL_GetError(g_db, error, 255);
 			LogError("Failed to query (error: %s)", error);
 		} else {
@@ -120,7 +120,7 @@ public void OnPluginEnd()
 
 public void T_NoResult(Database db, DBResultSet results, const char[] error, any data)
 {
-	if (results == INVALID_HANDLE)
+	if (results == null)
 		LogError("Failed to query (error: %s)", error);
 }
 
@@ -143,7 +143,7 @@ public void GetPlayerRecords(int client)
 
 public void T_ReadPlayerRecords(Database db, DBResultSet results, const char[] error, any client)
 {
-	if (results == INVALID_HANDLE)
+	if (results == null)
 		LogError("Failed to query (error: %s)", error);
 	else if(results.RowCount) {
 		results.FetchRow();
@@ -259,7 +259,7 @@ public void OnJump(int client, JumpType type, float distance)
 
 public void T_WritePlayerRecords(Handle owner, Handle hndl, const char[] error, any data)
 {
-	if (hndl == INVALID_HANDLE)
+	if (hndl == null)
 		LogError("Failed to query (error: %s)", error);
 }
 
@@ -340,7 +340,7 @@ public Action Command_ShowRecord(int client, int args)
 
 public void T_FindPlayerRecord(Database db, DBResultSet results, const char[] error, any client)
 {
-	if (results == INVALID_HANDLE)
+	if (results == null)
 		LogError("Failed to query (error: %s)", error);
 	else {
 		switch (results.RowCount) {
@@ -378,7 +378,7 @@ public void T_FindPlayerRecord(Database db, DBResultSet results, const char[] er
 	}
 }
 
-/*void ShowRecordPanel(int client, DataPack Pack=INVALID_HANDLE)
+/*void ShowRecordPanel(int client, DataPack Pack=null)
 {
 	
 }*/
@@ -442,7 +442,7 @@ public int DeleteMenuHandler2(Menu menu, MenuAction action, int param1, int para
 
 public void T_DeletePlayerRecord1(Handle owner, Handle hndl, const char[] error, any data)
 {
-	if (hndl == INVALID_HANDLE)
+	if (hndl == null)
 		LogError("Failed to query (error: %s)", error);
 	else {
 		char query[255];
@@ -454,7 +454,7 @@ public void T_DeletePlayerRecord1(Handle owner, Handle hndl, const char[] error,
 
 public void T_DeletePlayerRecord2(Handle owner, Handle hndl, const char[] error, any data)
 {
-	if (hndl == INVALID_HANDLE)
+	if (hndl == null)
 		LogError("Failed to query (error: %s)", error);
 	else {
 		for(int i=1;i<=10;i++) {
@@ -482,7 +482,7 @@ void Log(const char[] fromat, any ...)
 		return;
 	char logfile[512], buffer[1024];
 	VFormat(buffer, 1024, fromat, 2);
-	GetPluginFilename(INVALID_HANDLE, logfile, 512);
+	GetPluginFilename(null, logfile, 512);
 	ReplaceString(logfile, 512, ".smx", "");
 	Format(logfile, 512, "addons/sourcemod/logs/%s.logs.txt", logfile);
 	LogToFileEx(logfile, "%s", buffer);
